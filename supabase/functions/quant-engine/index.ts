@@ -24,7 +24,7 @@ async function currentUserId(req: Request) {
   return data.user.id;
 }
 
-async function getJson(url: string, timeout = 14_000) {
+async function getJson(url: string, timeout = 14_000, attempt = 0): Promise<any> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
@@ -38,6 +38,12 @@ async function getJson(url: string, timeout = 14_000) {
     });
     if (!response.ok) throw new Error(`外部行情源返回 ${response.status}`);
     return await response.json();
+  } catch (error) {
+    if (attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+      return getJson(url, timeout, attempt + 1);
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }
