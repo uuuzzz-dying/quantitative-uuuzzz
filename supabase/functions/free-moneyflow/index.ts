@@ -24,7 +24,7 @@ async function currentUserId(req: Request) {
   return data.user.id;
 }
 
-async function getJson(url: string) {
+async function getJson(url: string, attempt = 0): Promise<any> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 18_000);
   try {
@@ -38,6 +38,12 @@ async function getJson(url: string) {
     });
     if (!response.ok) throw new Error(`免费资金源返回 ${response.status}`);
     return await response.json();
+  } catch (error) {
+    if (attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+      return getJson(url, attempt + 1);
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }
