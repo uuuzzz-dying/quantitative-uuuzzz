@@ -50,13 +50,13 @@ const config: Record<string, { fid: string; fields: string }> = {
 };
 const marketFilter = "m:0+t:6+f:!2,m:0+t:13+f:!2,m:0+t:80+f:!2,m:1+t:2+f:!2,m:1+t:23+f:!2,m:0+t:7+f:!2,m:1+t:3+f:!2";
 
-async function ranking(kind: string) {
+async function rankingPage(kind: string, page: number) {
   const selected = config[kind];
   const params = new URLSearchParams({
     fid: selected.fid,
     po: "1",
-    pz: "6000",
-    pn: "1",
+    pz: "100",
+    pn: String(page),
     np: "1",
     fltt: "2",
     invt: "2",
@@ -67,8 +67,20 @@ async function ranking(kind: string) {
   const payload = await getJson(`https://push2.eastmoney.com/api/qt/clist/get?${params}`);
   const diff = payload?.data?.diff || [];
   const rows = Array.isArray(diff) ? diff : Object.values(diff);
-  if (!rows.length) throw new Error(`免费资金源暂时没有返回${kind}数据`);
-  return rows as Record<string, unknown>[];
+  return { total: Number(payload?.data?.total || 0), rows: rows as Record<string, unknown>[] };
+}
+
+async function ranking(kind: string) {
+  const first = await rankingPage(kind, 1);
+  if (!first.rows.length) throw new Error(`免费资金源暂时没有返回${kind}数据`);
+  const pageCount = Math.min(70, Math.ceil(first.total / 100));
+  const rows = [...first.rows];
+  for (let start = 2; start <= pageCount; start += 6) {
+    const pages = Array.from({ length: Math.min(6, pageCount - start + 1) }, (_, index) => start + index);
+    const group = await Promise.all(pages.map((page) => rankingPage(kind, page)));
+    rows.push(...group.flatMap((item) => item.rows));
+  }
+  return rows;
 }
 
 const number = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : null;
@@ -108,6 +120,7 @@ function tradeDate(timestamp: unknown) {
 }
 
 async function sync(userId: string) {
+  console.log("[free-moneyflow] sync started", { user_id: userId });
   const [today, five, ten] = await Promise.all([ranking("today"), ranking("d5"), ranking("d10")]);
   const todayMap = new Map(today.map((row: any) => [String(row.f12), row]));
   const fiveMap = new Map(five.map((row: any) => [String(row.f12), row]));
@@ -148,6 +161,7 @@ async function sync(userId: string) {
     const { error: upsertError } = await db.from("quant_moneyflow_latest").upsert(rows.slice(index, index + 500), { onConflict: "user_id,stock_id" });
     if (upsertError) throw upsertError;
   }
+  console.log("[free-moneyflow] sync finished", { user_id: userId, market_rows: today.length, matched: rows.length });
   return { market_rows: today.length, matched: rows.length, library_size: (stocks || []).length, trade_date: rows[0]?.trade_date || null, source: "eastmoney-free" };
 }
 
@@ -159,6 +173,7 @@ Deno.serve(async (req) => {
     if (action === "sync") return output(await sync(userId));
     return output({ ok: true, source: "eastmoney-free" });
   } catch (error) {
+    console.error("[free-moneyflow] request failed", error);
     return output({ error: error instanceof Error ? error.message : "免费资金服务失败" }, 400);
   }
 });
